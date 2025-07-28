@@ -1,6 +1,9 @@
 import pandas as pd
 from sqlalchemy import create_engine
 import urllib
+from openai import OpenAI
+from dotenv import load_dotenv
+import os 
 from datetime import datetime, timedelta
 
 def string_to_duration(duration_string):
@@ -15,17 +18,36 @@ def string_to_duration(duration_string):
     else:
         new_date = 0
     return new_date
-    
+#commit
+
+def clean_book_title(title):
+    prompt = f"""be a helpful assistant, the following is a misspelled or slightly incorrect book title. Correct it and return the proper title, as it would appear in a bookstore catalogue. If its allready correct then return it as-is. only return the correct book title, nothing else. return a blank string if you cannot process the input
+Incorrect Title: "{title}"
+Correct Title: """
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages = [{"role": "system" , "content" : "You are an assistant that corrects and standardises book titles. only return the corrected book title. No Quotes, explanations or formatting. "},{"role":"user", "content":prompt}],temperature=0.3
+    )
+    corrected = response.choices[0].message.content.strip().strip('"')
+    return corrected
+
 # define where we are getting these files from
 customer_filepath = '../data/03_Library SystemCustomers.csv'
 book_filepath = '../data/03_Library Systembook.csv'
 
+load_dotenv()
+client = OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
+
+# define database paramaters
 database_params = urllib.parse.quote_plus(
     "DRIVER={ODBC Driver 17 for SQL Server};"
     "SERVER=localhost;"
     "DATABASE=staging;"
     "Trusted_Connection=yes;"
 )
+
+#create a database engine instance 
 
 database_engine = create_engine(f'mssql+pyodbc:///?odbc_connect={database_params}')
 
@@ -34,6 +56,8 @@ database_engine = create_engine(f'mssql+pyodbc:///?odbc_connect={database_params
 
 customer = pd.read_csv(customer_filepath)
 book = pd.read_csv(book_filepath)
+
+#write the bronze data
 
 book.to_sql('book_bronze',con=database_engine,if_exists='append',index=False)
 customer.to_sql('customer_bronze',con=database_engine,if_exists='append',index=False)
@@ -118,24 +142,22 @@ book['BookTitle'] = book['BookTitle'].str.strip()
 book['RentalDays'] = book['RentalPeriodText'].apply(string_to_duration)
 book['ReturnDate'] = book['BookCheckout'] + pd.to_timedelta(book['RentalDays'], unit ='D')
 book['DaysLate'] = (book['BookReturned']- book['BookCheckout']).dt.days.fillna(0).astype(int)
+book['CorrectedTitle'] = book['BookTitle'].apply(clean_book_title)
 
-invalid_checkoutdate = book[book['BookCheckout'] >= pd.Timestamp.today()]
+invalid_checkoutdate = book[book['BookCheckout'] >= pd.Timestamp.today()] # identify dates in the future
 invalid_returndate = book[book['BookReturned'] >= pd.Timestamp.today()]
-null_checkoutdate = book[book['BookCheckout'].isna()]
+null_checkoutdate = book[book['BookCheckout'].isna()] # identify null dates
 null_returndate = book[book['BookReturned'].isna()]
 
-invalid_dates = pd.concat([invalid_checkoutdate,invalid_returndate,null_checkoutdate,null_returndate], ignore_index = True)
+invalid_dates = pd.concat([invalid_checkoutdate,invalid_returndate,null_checkoutdate,null_returndate], ignore_index = True) # build a list of all invalid dates
 
-print (book)
-print (customer)
 
-print (book_duplicates)
-print (customer_duplicates)
-print (invalid_dates)
-
+#write results to csv 
 book.to_csv('../data/book.csv')
 customer.to_csv('../data/customer.csv')
 invalid_dates.to_csv('../data/invalid_books.csv')
+
+#write silver results to SQL
 
 book.to_sql('book_silver',con=database_engine,if_exists='append',index=False)
 customer.to_sql('customer_silver',con=database_engine,if_exists='append',index=False)
