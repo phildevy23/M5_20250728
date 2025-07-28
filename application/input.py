@@ -1,4 +1,6 @@
 import pandas as pd
+from sqlalchemy import create_engine
+import urllib
 from datetime import datetime, timedelta
 
 def string_to_duration(duration_string):
@@ -18,11 +20,23 @@ def string_to_duration(duration_string):
 customer_filepath = '../data/03_Library SystemCustomers.csv'
 book_filepath = '../data/03_Library Systembook.csv'
 
+database_params = urllib.parse.quote_plus(
+    "DRIVER={ODBC Driver 17 for SQL Server};"
+    "SERVER=localhost;"
+    "DATABASE=staging;"
+    "Trusted_Connection=yes;"
+)
+
+database_engine = create_engine(f'mssql+pyodbc:///?odbc_connect={database_params}')
+
 
 # import them into data frames
 
 customer = pd.read_csv(customer_filepath)
 book = pd.read_csv(book_filepath)
+
+book.to_sql('book_bronze',con=database_engine,if_exists='append',index=False)
+customer.to_sql('customer_bronze',con=database_engine,if_exists='append',index=False)
 
 # print basic data about them
 print ("Customer")
@@ -122,3 +136,7 @@ print (invalid_dates)
 book.to_csv('../data/book.csv')
 customer.to_csv('../data/customer.csv')
 invalid_dates.to_csv('../data/invalid_books.csv')
+
+book.to_sql('book_silver',con=database_engine,if_exists='append',index=False)
+customer.to_sql('customer_silver',con=database_engine,if_exists='append',index=False)
+invalid_dates.to_sql('book_silver_errors',con=database_engine,if_exists='append',index=False)
