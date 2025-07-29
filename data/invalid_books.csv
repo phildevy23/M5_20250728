@@ -1,3 +1,3 @@
-,LoanID,BookTitle,BookCheckout,BookReturned,RentalPeriodText,CustomerID,RentalDays,ReturnDate,DaysLate
-0,7,IT,2063-04-10,2023-04-03,2 weeks,6,14,2063-04-24,-14617
-1,17,The Bloody Chamber,,2023-06-04,2 weeks,3,14,,0
+,LoanID,BookTitle,BookCheckout,BookReturned,RentalPeriodText,CustomerID,RentalDays,ReturnDate,DaysLate,CorrectedTitle
+0,7,IT,2063-04-10,2023-04-03,2 weeks,6,14,2063-04-24,-14617.0,IT
+1,17,The Bloody Chamber,,2023-06-04,2 weeks,3,14,,,The Bloody Chamber

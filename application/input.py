@@ -1,26 +1,25 @@
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import urllib
 from openai import OpenAI
 from dotenv import load_dotenv
 import os 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 def string_to_duration(duration_string):
     number_str,unit_str = duration_string.split(' ',1)
-    print (number_str)
-    print (unit_str)
     number_int = int(number_str)
     if unit_str.lower().strip() in ['week','weeks']:
-        new_date = number_int * 7
+        new_duration = number_int * 7
     elif unit_str.lower().strip() in ['day','days']:
-        new_date = number_int * 1
+        new_duration = number_int * 1
     else:
-        new_date = 0
-    return new_date
+        new_duration = 0
+    return new_duration
 #commit
 
-def clean_book_title(title):
+def clean_book_title(title,client): # send book title to openAI and get a Corrected and Formatted Result
     prompt = f"""be a helpful assistant, the following is a misspelled or slightly incorrect book title. Correct it and return the proper title, as it would appear in a bookstore catalogue. If its allready correct then return it as-is. only return the correct book title, nothing else. return a blank string if you cannot process the input
 Incorrect Title: "{title}"
 Correct Title: """
@@ -30,135 +29,186 @@ Correct Title: """
         messages = [{"role": "system" , "content" : "You are an assistant that corrects and standardises book titles. only return the corrected book title. No Quotes, explanations or formatting. "},{"role":"user", "content":prompt}],temperature=0.3
     )
     corrected = response.choices[0].message.content.strip().strip('"')
+    print (f"OpenAI identified {title} as {corrected}.")
     return corrected
 
-# define where we are getting these files from
-customer_filepath = '../data/03_Library SystemCustomers.csv'
-book_filepath = '../data/03_Library Systembook.csv'
+def Import_File(filename: str):
+    script_dir = Path(__file__).resolve().parent
+    print (f"Attempting to Import {script_dir.parent / 'data' / filename}")
+    return pd.read_csv(script_dir.parent / 'data' / filename)
 
-load_dotenv()
-client = OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
+def Initialise_OpenAI():
+    load_dotenv()
+    print("Obtaining OpenAI API Key")
+    return OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
 
-# define database paramaters
-database_params = urllib.parse.quote_plus(
-    "DRIVER={ODBC Driver 17 for SQL Server};"
-    "SERVER=localhost;"
-    "DATABASE=staging;"
-    "Trusted_Connection=yes;"
-)
+def Initialise_Database(DB_Version):
+    # define database paramaters
+    if DB_Version == 'prod':
+        database_params = urllib.parse.quote_plus(
+        "DRIVER={ODBC Driver 17 for SQL Server};"
+        "SERVER=localhost;"
+        "DATABASE=staging;"
+        "Trusted_Connection=yes;"
+        )
 
-#create a database engine instance 
+    elif DB_Version == 'test': 
+        database_params =   urllib.parse.quote_plus(
+        "DRIVER={ODBC Driver 17 for SQL Server};"
+        "SERVER=192.168.0.100;"
+        "DATABASE=staging;"
+        "UID=sa;"
+        "PWD=ChangeMe!;"
+    )
 
-database_engine = create_engine(f'mssql+pyodbc:///?odbc_connect={database_params}')
+    #create a database engine instance 
+    print (f"Creating {DB_Version} SQL Engine")
+    return create_engine(f'mssql+pyodbc:///?odbc_connect={database_params}')
 
+def Drop_SQL_Table(SQL_Engine,tablename: str):
+    with SQL_Engine.connect() as conn:
+        with conn.begin():
+            conn.execute(text(f"drop table if exists {tablename}"))
 
-# import them into data frames
+def Write_to_SQL(source: pd.DataFrame, destination: str, SQL_Engine):
+    #write to sql
+    Drop_SQL_Table(SQL_Engine,destination)
+    print (f"Writing SQL to {destination}")
+    source.to_sql(destination,con=SQL_Engine,if_exists='append',index=False)
 
-customer = pd.read_csv(customer_filepath)
-book = pd.read_csv(book_filepath)
+def Write_to_CSV(source:pd.DataFrame, destination: str):
 
-#write the bronze data
+    script_dir = Path(__file__).resolve().parent
+    print (f"Writing CSV to {script_dir.parent} / 'data' / {destination}")
+    return source.to_csv(script_dir.parent / 'data' / destination)
 
-book.to_sql('book_bronze',con=database_engine,if_exists='append',index=False)
-customer.to_sql('customer_bronze',con=database_engine,if_exists='append',index=False)
+def Remove_Null_Values(source: pd.DataFrame):
+    print(f"Removed Null rows")
+    source.dropna(how ='all',inplace=True)
 
-# print basic data about them
-print ("Customer")
-print (customer)
+def Capture_Duplicates(source: pd.DataFrame,detection_columns: list[str] = None):
+    print(f"Capturing Duplicates")
+    return source[source.duplicated(subset = detection_columns)]
 
-print ("Book")
-print(book)
+def Drop_Duplicates(source: pd.DataFrame,detection_columns: list[str] = None):
+    print (f"Dropping duplicates")
+    return source.drop_duplicates(subset = detection_columns, inplace=True)
 
+def Rename_Column(source: pd.DataFrame, original: str, new: str):
+    print (f"Renaming Column in dataframe:  {original} is now {new}.")
+    source.rename(columns={original : new}, inplace=True)
 
-#Required Transformations
-#Remove nullls
-#Rename Columns in camelcase
-#Create list of duplicates
-#Customers.CustomerID to INT
-#Books.Id to INT
-#Books.checkout to Date
-#Books.returned to Date
-#Create column from Books.day allowed to borrow
-
-
-#Remove Null values from Customers 
-customer.dropna(how ='all',inplace=True)
-print(customer)
-
-#Remove Null values from book
-book.dropna(how='all',inplace=True)
-print(book)
-
-# capture and drop duplicates
-
-customer_duplicates = customer[customer.duplicated()]
-customer.drop_duplicates(inplace =True)
-
-book_duplicates = book[book.duplicated(subset=['Books','Book checkout','Book Returned','Days allowed to borrow','Customer ID'])]
-book.drop_duplicates(subset=['Books','Book checkout','Book Returned','Days allowed to borrow','Customer ID'],inplace=True)
-#Rename customer columns
-
-customer.rename(columns={'Customer ID':'CustomerID'}, inplace=True)
-customer.rename(columns={'Customer Name': 'Customer Name'}, inplace = True)
-
-#Rename Book Columns
-
-book.rename(columns={'Book checkout':'BookCheckout'}, inplace=True)
-book.rename(columns={'Book Returned':'BookReturned'}, inplace=True)
-book.rename(columns={'Id':'LoanID'}, inplace=True)
-book.rename(columns={'Books':'BookTitle'}, inplace=True)
-book.rename(columns={'Days allowed to borrow':'RentalPeriodText'}, inplace=True)
-book.rename(columns={'Customer ID':'CustomerID'}, inplace=True)
-
-
-print ('Columns Renamed')
-print(book.columns.to_list())
-
-
+def Clean_Date(source: pd.DataFrame, column : str):
+    print (f"Cleaning Date from {column}")
+    source[column] = source[column].str.replace('"','').str.strip()
 # Clean date columns of quotation marks
 
-book['BookCheckout'] = book['BookCheckout'].str.replace ('"','')
-book['BookReturned'] = book['BookReturned'].str.replace ('"','')
+def Convert_to_Int(source: pd.DataFrame, column: str):
+    print(f"Converted {column} to an Integer")
+    source[column] = source[column].fillna(0).astype(int)
 
-# trim date columns
+def Convert_to_Date(source: pd.DataFrame, column:str):
+    print(f"Converted {column} to an Date")
+    source[column] = pd.to_datetime(source[column],errors='coerce',dayfirst=True)
 
-book['BookCheckout'] = book['BookCheckout'].str.strip ()
-book['BookReturned'] = book['BookReturned'].str.strip ()
+def Calculate_date_Difference(source:pd.DataFrame, date1: str, date2: str):
+    difference = (source[date1] - source[date2]).dt.days.fillna(0).astype(int)
+    print (f"Calculated difference between {date1} and {date2} as {difference} days.")
+    return difference
 
-# convert data types
+def Capture_Invalid_Dates(source: pd.DataFrame, column: str):
+    print(f"Capturing Invalid dates from {column}")
+    return source[(source[column] > pd.Timestamp.today()) | (source[column].isna())]
+    
 
-customer['CustomerID'] = customer['CustomerID'].fillna(0).astype(int) # convert customer id to int
-book['LoanID'] = book['LoanID'].fillna(0).astype(int) #convert customer id to int
-book['CustomerID'] = book['CustomerID'].fillna(0).astype(int) #convert customer id to int
-book['BookReturned'] = pd.to_datetime(book['BookReturned'],errors='coerce',dayfirst=True) # convert returned date to a datetype
-book['BookCheckout'] = pd.to_datetime(book['BookCheckout'],errors='coerce',dayfirst=True) # convert checkout date to a datetype
+if __name__ == '__main__':
+    # Initialisation --------------------------------------
+    SQL_Database = Initialise_Database('test')
+    OpenAI_Client = Initialise_OpenAI()
 
+    # Import data from CSV ---------------------------------
+    customer = Import_File('03_Library SystemCustomers.csv')
+    book = Import_File('03_Library Systembook.csv')
 
-#trim book name
+    # Write to bronze layer ------------------------------- 
+    print ("-Writing Bronze Layer Data to SQL")
+    Write_to_SQL(customer,'customer_bronze',SQL_Database)
+    Write_to_SQL(book,'book_bronze',SQL_Database)
+    # Begin Cleaning Data -------------------------------------------------------------
+    print ("-Cleaning and Validating Data")
 
-book['BookTitle'] = book['BookTitle'].str.strip()
+    #Remove Null values from Customers and Books
+    Remove_Null_Values(customer)
+    Remove_Null_Values(book)
 
-#calucalted column for rental_duration 
-book['RentalDays'] = book['RentalPeriodText'].apply(string_to_duration)
-book['ReturnDate'] = book['BookCheckout'] + pd.to_timedelta(book['RentalDays'], unit ='D')
-book['DaysLate'] = (book['BookReturned']- book['BookCheckout']).dt.days.fillna(0).astype(int)
-book['CorrectedTitle'] = book['BookTitle'].apply(clean_book_title)
+    # capture and drop Duplicates from customer and books. Exclude the Incremental ID from the book Dupliate check
+    customer_duplicates = Capture_Duplicates(customer)
+    Drop_Duplicates(customer)
 
-invalid_checkoutdate = book[book['BookCheckout'] >= pd.Timestamp.today()] # identify dates in the future
-invalid_returndate = book[book['BookReturned'] >= pd.Timestamp.today()]
-null_checkoutdate = book[book['BookCheckout'].isna()] # identify null dates
-null_returndate = book[book['BookReturned'].isna()]
+    book_duplicates = Capture_Duplicates(book,['Books','Book checkout','Book Returned','Days allowed to borrow','Customer ID'])
+    Drop_Duplicates(book,['Books','Book checkout','Book Returned','Days allowed to borrow','Customer ID'])
 
-invalid_dates = pd.concat([invalid_checkoutdate,invalid_returndate,null_checkoutdate,null_returndate], ignore_index = True) # build a list of all invalid dates
+    # Rename Customer Columns
+    Rename_Column(customer,'Customer ID','CustomerID')
+    Rename_Column(customer,'Customer Name','Customer Name')
 
+    #Rename Book Columns
+    Rename_Column(book,'Book checkout','BookCheckout')
+    Rename_Column(book,'Book Returned','BookReturned')
+    Rename_Column(book,'Id','LoanID')
+    Rename_Column(book,'Books','BookTitle')
+    Rename_Column(book,'Days allowed to borrow','RentalPeriodText')
+    Rename_Column(book,'Customer ID','CustomerID')
 
-#write results to csv 
-book.to_csv('../data/book.csv')
-customer.to_csv('../data/customer.csv')
-invalid_dates.to_csv('../data/invalid_books.csv')
+    # Clean the Date Fields in the book table
+    Clean_Date(book,'BookCheckout')
+    Clean_Date(book,'BookReturned')
 
-#write silver results to SQL
+    # convert data types, IDs to INT and Dates to DATE
 
-book.to_sql('book_silver',con=database_engine,if_exists='append',index=False)
-customer.to_sql('customer_silver',con=database_engine,if_exists='append',index=False)
-invalid_dates.to_sql('book_silver_errors',con=database_engine,if_exists='append',index=False)
+    Convert_to_Int(customer,'CustomerID')
+    Convert_to_Int(book,'CustomerID')    
+    Convert_to_Int(book,'LoanID')
+
+    Convert_to_Date(book,'BookReturned')
+    Convert_to_Date(book,'BookCheckout')
+    
+
+    #Trim book name
+    book['BookTitle'] = book['BookTitle'].str.strip()
+
+    #calucalted column for rental_duration 
+    book['RentalDays'] = book['RentalPeriodText'].apply(string_to_duration)
+
+    # calculate column for return date (checkout date + rental days allowed)
+    book['ReturnDate'] = pd.to_datetime(book['BookCheckout']) + pd.to_timedelta(book['RentalDays'], unit='D')
+
+    # calculate column for dayslate (days between checkout date and return date)
+    book['DaysLate'] = (pd.to_datetime(book['BookReturned']) - pd.to_datetime(book['BookCheckout'])).dt.days
+
+    # calculate column to clean title (Send to OpenAI model)
+    print ("Sending titles to OpenAI")
+    book['CorrectedTitle'] = book['BookTitle'].apply(lambda title: clean_book_title(title, OpenAI_Client))
+
+    # capture any invalid data and store for seperate processing
+    invalid_checkoutdate = Capture_Invalid_Dates(book,'BookCheckout')
+    invalid_returndate = Capture_Invalid_Dates(book,'BookReturned')
+    invalid_dates = pd.concat([invalid_checkoutdate,invalid_returndate], ignore_index = True) # build a list of all invalid dates
+
+    print ("-Writing output to CSV")
+    #write results to csv 
+    Write_to_CSV(book,'book.csv')
+    Write_to_CSV(customer,'customer.csv')
+    Write_to_CSV(invalid_dates,'invalid_books.csv')
+    Write_to_CSV(book_duplicates,'book_duplicates.csv')
+    Write_to_CSV(customer_duplicates,'customer_duplicates.csv')
+
+    #write silver results to SQL
+    print ("-Writing output to SQL")
+    Write_to_SQL(book,'book_silver',SQL_Database)
+    Write_to_SQL(customer,'customer_silver',SQL_Database)
+    Write_to_SQL(invalid_dates,'book_date_errors',SQL_Database)
+    Write_to_SQL(book_duplicates,'book_duplicate_errors',SQL_Database)
+    Write_to_SQL(customer_duplicates,'customer_duplicate_errors',SQL_Database)
+
+    print ("Processing Complete")
