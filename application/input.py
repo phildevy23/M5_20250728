@@ -19,23 +19,25 @@ def string_to_duration(duration_string):
     return new_duration
 #commit
 
-def Initialise_OpenAI():
-    load_dotenv()
-    print("Obtaining OpenAI API Key")
-    return OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
+class TitleCleaner:
 
-def clean_book_title(title,client): # send book title to openAI and get a Corrected and Formatted Result
-    prompt = f"""be a helpful assistant, the following is a misspelled or slightly incorrect book title. Correct it and return the proper title, as it would appear in a bookstore catalogue. If its allready correct then return it as-is. only return the correct book title, nothing else. return a blank string if you cannot process the input
-Incorrect Title: "{title}"
-Correct Title: """
+    def __init__(self):
+        load_dotenv()
+        print("Obtaining OpenAI API Key")
+        self.client = OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
 
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages = [{"role": "system" , "content" : "You are an assistant that corrects and standardises book titles. only return the corrected book title. No Quotes, explanations or formatting. "},{"role":"user", "content":prompt}],temperature=0.3
-    )
-    corrected = response.choices[0].message.content.strip().strip('"')
-    print (f"OpenAI identified {title} as {corrected}.")
-    return corrected
+    def clean_book_title(self,title): # send book title to openAI and get a Corrected and Formatted Result
+        prompt = f"""be a helpful assistant, the following is a misspelled or slightly incorrect book title. Correct it and return the proper title, as it would appear in a bookstore catalogue. If its all ready correct then return it as-is. only return the correct book title, nothing else. return a blank string if you cannot process the input
+    Incorrect Title: "{title}"
+    Correct Title: """
+
+        response = self.client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages = [{"role": "system" , "content" : "You are an assistant that corrects and standardises book titles. only return the corrected book title. No Quotes, explanations or formatting. "},{"role":"user", "content":prompt}],temperature=0.3
+        )
+        corrected = response.choices[0].message.content.strip().strip('"')
+        print (f"OpenAI identified '{title}' as '{corrected}'.")
+        return corrected
 
 def Import_File(filename: str):
     script_dir = Path(__file__).resolve().parent
@@ -128,8 +130,8 @@ def Capture_Invalid_Dates(source: pd.DataFrame, column: str):
 
 if __name__ == '__main__':
     # Initialisation --------------------------------------
-    SQL_Database = SQLHelper('test')
-    OpenAI_Client = Initialise_OpenAI()
+    SQL_Database = SQLHelper('prod')
+    OpenAI_Client = TitleCleaner()
 
     # Import data from CSV ---------------------------------
     customer = Import_File('03_Library SystemCustomers.csv')
@@ -193,7 +195,7 @@ if __name__ == '__main__':
 
     # calculate column to clean title (Send to OpenAI model)
     print ("Sending titles to OpenAI")
-    book['CorrectedTitle'] = book['BookTitle'].apply(lambda title: clean_book_title(title, OpenAI_Client))
+    book['CorrectedTitle'] = book['BookTitle'].apply(lambda title: OpenAI_Client.clean_book_title(title))
 
     # capture any invalid data and store for seperate processing
     invalid_checkoutdate = Capture_Invalid_Dates(book,'BookCheckout')
