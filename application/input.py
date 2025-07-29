@@ -19,6 +19,11 @@ def string_to_duration(duration_string):
     return new_duration
 #commit
 
+def Initialise_OpenAI():
+    load_dotenv()
+    print("Obtaining OpenAI API Key")
+    return OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
+
 def clean_book_title(title,client): # send book title to openAI and get a Corrected and Formatted Result
     prompt = f"""be a helpful assistant, the following is a misspelled or slightly incorrect book title. Correct it and return the proper title, as it would appear in a bookstore catalogue. If its allready correct then return it as-is. only return the correct book title, nothing else. return a blank string if you cannot process the input
 Incorrect Title: "{title}"
@@ -37,44 +42,44 @@ def Import_File(filename: str):
     print (f"Attempting to Import {script_dir.parent / 'data' / filename}")
     return pd.read_csv(script_dir.parent / 'data' / filename)
 
-def Initialise_OpenAI():
-    load_dotenv()
-    print("Obtaining OpenAI API Key")
-    return OpenAI(api_key = os.environ.get("OPENAI_API_KEY"))
 
-def Initialise_Database(DB_Version):
-    # define database paramaters
-    if DB_Version == 'prod':
-        database_params = urllib.parse.quote_plus(
-        "DRIVER={ODBC Driver 17 for SQL Server};"
-        "SERVER=localhost;"
-        "DATABASE=staging;"
-        "Trusted_Connection=yes;"
+class SQLHelper:
+
+    def __init__(self,DB_Version):
+        # define database paramaters
+        if DB_Version == 'prod':
+            database_params = urllib.parse.quote_plus(
+            "DRIVER={ODBC Driver 17 for SQL Server};"
+            "SERVER=localhost;"
+            "DATABASE=staging;"
+            "Trusted_Connection=yes;"
+            )
+
+        elif DB_Version == 'test': 
+            database_params =   urllib.parse.quote_plus(
+            "DRIVER={ODBC Driver 17 for SQL Server};"
+            "SERVER=192.168.0.100;"
+            "DATABASE=staging;"
+            "UID=sa;"
+            "PWD=ChangeMe!;"
         )
 
-    elif DB_Version == 'test': 
-        database_params =   urllib.parse.quote_plus(
-        "DRIVER={ODBC Driver 17 for SQL Server};"
-        "SERVER=192.168.0.100;"
-        "DATABASE=staging;"
-        "UID=sa;"
-        "PWD=ChangeMe!;"
-    )
+        #create a database engine instance 
+        print (f"Creating {DB_Version} SQL Engine")
+        self.engine = create_engine(f'mssql+pyodbc:///?odbc_connect={database_params}')
 
-    #create a database engine instance 
-    print (f"Creating {DB_Version} SQL Engine")
-    return create_engine(f'mssql+pyodbc:///?odbc_connect={database_params}')
+    def Drop_SQL_Table(self,tablename: str):
+        with self.engine.connect() as conn:
+            with conn.begin():
+                conn.execute(text(f"drop table if exists {tablename}"))
 
-def Drop_SQL_Table(SQL_Engine,tablename: str):
-    with SQL_Engine.connect() as conn:
-        with conn.begin():
-            conn.execute(text(f"drop table if exists {tablename}"))
+    def Write_to_SQL(self, source: pd.DataFrame, destination: str):
+        #write to sql
+        self.Drop_SQL_Table(destination)
+        print (f"Writing SQL to {destination}")
+        source.to_sql(destination,con=self.engine,if_exists='append',index=False)
 
-def Write_to_SQL(source: pd.DataFrame, destination: str, SQL_Engine):
-    #write to sql
-    Drop_SQL_Table(SQL_Engine,destination)
-    print (f"Writing SQL to {destination}")
-    source.to_sql(destination,con=SQL_Engine,if_exists='append',index=False)
+
 
 def Write_to_CSV(source:pd.DataFrame, destination: str):
 
@@ -123,7 +128,7 @@ def Capture_Invalid_Dates(source: pd.DataFrame, column: str):
 
 if __name__ == '__main__':
     # Initialisation --------------------------------------
-    SQL_Database = Initialise_Database('test')
+    SQL_Database = SQLHelper('test')
     OpenAI_Client = Initialise_OpenAI()
 
     # Import data from CSV ---------------------------------
@@ -132,8 +137,8 @@ if __name__ == '__main__':
 
     # Write to bronze layer ------------------------------- 
     print ("-Writing Bronze Layer Data to SQL")
-    Write_to_SQL(customer,'customer_bronze',SQL_Database)
-    Write_to_SQL(book,'book_bronze',SQL_Database)
+    SQL_Database.Write_to_SQL(customer,'customer_bronze')
+    SQL_Database.Write_to_SQL(book,'book_bronze')
     # Begin Cleaning Data -------------------------------------------------------------
     print ("-Cleaning and Validating Data")
 
@@ -205,10 +210,10 @@ if __name__ == '__main__':
 
     #write silver results to SQL
     print ("-Writing output to SQL")
-    Write_to_SQL(book,'book_silver',SQL_Database)
-    Write_to_SQL(customer,'customer_silver',SQL_Database)
-    Write_to_SQL(invalid_dates,'book_date_errors',SQL_Database)
-    Write_to_SQL(book_duplicates,'book_duplicate_errors',SQL_Database)
-    Write_to_SQL(customer_duplicates,'customer_duplicate_errors',SQL_Database)
+    SQL_Database.Write_to_SQL(book,'book_silver')
+    SQL_Database.Write_to_SQL(customer,'customer_silver')
+    SQL_Database.Write_to_SQL(invalid_dates,'book_date_errors')
+    SQL_Database.Write_to_SQL(book_duplicates,'book_duplicate_errors')
+    SQL_Database.Write_to_SQL(customer_duplicates,'customer_duplicate_errors')
 
     print ("Processing Complete")
