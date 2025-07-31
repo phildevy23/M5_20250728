@@ -4,8 +4,28 @@ import urllib
 from openai import OpenAI
 from dotenv import load_dotenv
 import os 
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+metrics = {
+"run_id" : 0,
+"number_of_customer_rows_dropped": 0,
+"number_of_book_rows_dropped" : 0,
+"number_of_book_na": 0,
+"number_of_customer_na": 0,
+"numer_of_invalid_dates": 0,
+"number_of_OpenAI_API_calls": 0,
+"number_of_customers" : 0,
+"total_run_duration": 0.0,
+"initialisation_step_duration": 0.0,
+"import_step_duration" : 0.0,
+"bronze_write_duration" : 0.0,
+"cleaning_step_duration" : 0.0,
+"Open_AI_step_duration" : 0.0,
+"export_duration" : 0.0
+}
+
 
 def string_to_duration(duration_string):
     number_str,unit_str = duration_string.split(' ',1)
@@ -37,6 +57,7 @@ class TitleCleaner:
         )
         corrected = response.choices[0].message.content.strip().strip('"')
         print (f"OpenAI identified '{title}' as '{corrected}'.")
+        metrics['number_of_OpenAI_API_calls'] += 1
         return corrected
 
 def Import_File(filename: str):
@@ -75,9 +96,10 @@ class SQLHelper:
             with conn.begin():
                 conn.execute(text(f"drop table if exists {tablename}"))
 
-    def Write_to_SQL(self, source: pd.DataFrame, destination: str):
+    def Write_to_SQL(self, source: pd.DataFrame, destination: str, drop = 1):
         #write to sql
-        self.Drop_SQL_Table(destination)
+        if drop == 1:
+            self.Drop_SQL_Table(destination)
         print (f"Writing SQL to {destination}")
         source.to_sql(destination,con=self.engine,if_exists='append',index=False)
 
@@ -129,24 +151,34 @@ def Capture_Invalid_Dates(source: pd.DataFrame, column: str):
     
 
 if __name__ == '__main__':
+    start_time = time.time()
     # Initialisation --------------------------------------
-    SQL_Database = SQLHelper('prod')
+    SQL_Database = SQLHelper('test')
     OpenAI_Client = TitleCleaner()
 
+    initialisation_time = time.time()
     # Import data from CSV ---------------------------------
     customer = Import_File('03_Library SystemCustomers.csv')
     book = Import_File('03_Library Systembook.csv')
-
+    
+    import_time = time.time()
     # Write to bronze layer ------------------------------- 
     print ("-Writing Bronze Layer Data to SQL")
     SQL_Database.Write_to_SQL(customer,'customer_bronze')
     SQL_Database.Write_to_SQL(book,'book_bronze')
     # Begin Cleaning Data -------------------------------------------------------------
-    print ("-Cleaning and Validating Data")
+    bronze_write_time = time.time()
 
+    print ("-Cleaning and Validating Data")
+    
     #Remove Null values from Customers and Books
+    customer_len = len(customer)
+    book_len = len(book)
+
     Remove_Null_Values(customer)
     Remove_Null_Values(book)
+    customer_dropped =  customer_len - len(customer)
+    book_dropped = book_len - len(book)
 
     # capture and drop Duplicates from customer and books. Exclude the Incremental ID from the book Dupliate check
     customer_duplicates = Capture_Duplicates(customer)
@@ -193,14 +225,17 @@ if __name__ == '__main__':
     # calculate column for dayslate (days between checkout date and return date)
     book['DaysLate'] = (pd.to_datetime(book['BookReturned']) - pd.to_datetime(book['BookCheckout'])).dt.days
 
-    # calculate column to clean title (Send to OpenAI model)
-    print ("Sending titles to OpenAI")
-    book['CorrectedTitle'] = book['BookTitle'].apply(lambda title: OpenAI_Client.clean_book_title(title))
-
     # capture any invalid data and store for seperate processing
     invalid_checkoutdate = Capture_Invalid_Dates(book,'BookCheckout')
     invalid_returndate = Capture_Invalid_Dates(book,'BookReturned')
     invalid_dates = pd.concat([invalid_checkoutdate,invalid_returndate], ignore_index = True) # build a list of all invalid dates
+
+    cleaning_time = time.time()
+
+        # calculate column to clean title (Send to OpenAI model)
+    print ("Sending titles to OpenAI")
+    book['CorrectedTitle'] = book['BookTitle'].apply(lambda title: OpenAI_Client.clean_book_title(title))
+    open_ai_time = time.time()
 
     print ("-Writing output to CSV")
     #write results to csv 
@@ -217,5 +252,27 @@ if __name__ == '__main__':
     SQL_Database.Write_to_SQL(invalid_dates,'book_date_errors')
     SQL_Database.Write_to_SQL(book_duplicates,'book_duplicate_errors')
     SQL_Database.Write_to_SQL(customer_duplicates,'customer_duplicate_errors')
+
+    end_time = time.time()
+
+    metrics['run_id'] = datetime.now().strftime("%Y%m%d%H%M%S")
+    metrics['number_of_customers'] = len(customer)
+    metrics['number_of_book_na'] = book_dropped
+    metrics['number_of_customer_na'] = customer_dropped
+    
+    metrics['number_of_customer_rows_dropped'] = len(customer_duplicates)
+    metrics['number_of_book_rows_dropped'] = len(book_duplicates)
+    metrics['numer_of_invalid_dates'] = len(invalid_dates)
+
+    metrics['initialisation_step_duration'] = initialisation_time - start_time
+    metrics['import_step_duration'] = import_time - initialisation_time
+    metrics['bronze_write_duration'] = bronze_write_time - import_time
+    metrics['cleaning_step_duration'] = cleaning_time - bronze_write_time
+    metrics['Open_AI_step_duration'] = open_ai_time - cleaning_time
+    metrics['export_duration'] = end_time - open_ai_time
+
+    metrics['total_run_duration'] = end_time - start_time
+    metrics_df = pd.DataFrame([metrics])
+    SQL_Database.Write_to_SQL(metrics_df,'run_metrics',0)
 
     print ("Processing Complete")
