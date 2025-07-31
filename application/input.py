@@ -111,9 +111,12 @@ def Write_to_CSV(source:pd.DataFrame, destination: str):
     print (f"Writing CSV to {script_dir.parent} / 'data' / {destination}")
     return source.to_csv(script_dir.parent / 'data' / destination)
 
-def Remove_Null_Values(source: pd.DataFrame):
+def Remove_Null_Values(source: pd.DataFrame, detection_columns: list[str] = None):
     print(f"Removed Null rows")
-    source.dropna(how ='all',inplace=True)
+    if detection_columns is None:
+        source.dropna(inplace=True)
+    else:
+        source.dropna(subset = detection_columns,inplace=True)
 
 def Capture_Duplicates(source: pd.DataFrame,detection_columns: list[str] = None):
     print(f"Capturing Duplicates")
@@ -148,12 +151,15 @@ def Calculate_date_Difference(source:pd.DataFrame, date1: str, date2: str):
 def Capture_Invalid_Dates(source: pd.DataFrame, column: str):
     print(f"Capturing Invalid dates from {column}")
     return source[(source[column] > pd.Timestamp.today()) | (source[column].isna())]
-    
+
+def Drop_Invalid_Dates(source: pd.DataFrame, column: str):
+    print(f"Dropping Invalid dates from {column}")
+    return  source[(source[column] <= pd.Timestamp.today()) & (~source[column].isna())]    
 
 if __name__ == '__main__':
     start_time = time.time()
     # Initialisation --------------------------------------
-    SQL_Database = SQLHelper('test')
+    SQL_Database = SQLHelper('prod')
     OpenAI_Client = TitleCleaner()
 
     initialisation_time = time.time()
@@ -176,7 +182,7 @@ if __name__ == '__main__':
     book_len = len(book)
 
     Remove_Null_Values(customer)
-    Remove_Null_Values(book)
+    Remove_Null_Values(book,'Books')
     customer_dropped =  customer_len - len(customer)
     book_dropped = book_len - len(book)
 
@@ -229,6 +235,9 @@ if __name__ == '__main__':
     invalid_checkoutdate = Capture_Invalid_Dates(book,'BookCheckout')
     invalid_returndate = Capture_Invalid_Dates(book,'BookReturned')
     invalid_dates = pd.concat([invalid_checkoutdate,invalid_returndate], ignore_index = True) # build a list of all invalid dates
+
+    book = Drop_Invalid_Dates(book,'BookCheckout')
+    book = Drop_Invalid_Dates(book,'BookReturned')
 
     cleaning_time = time.time()
 
